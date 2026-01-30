@@ -1,0 +1,27 @@
+meta {
+  name: Editar Contenido Nota
+  type: http
+  seq: 7
+}
+
+patch {
+  url: http://localhost:5000/api/notes/:id
+  body: json
+  auth: inherit
+}
+
+params:path {
+  id: 
+}
+
+body:json {
+  {
+    "content": "Contenido editado"
+  }
+  
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

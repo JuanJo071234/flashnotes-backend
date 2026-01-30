@@ -1,0 +1,23 @@
+meta {
+  name: Crear Nota
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://localhost:5000/api/notes
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "title": "Mi primera nota",
+    "content": "FlashNotes funciona 😎 "
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

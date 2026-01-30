@@ -1,0 +1,20 @@
+meta {
+  name: Restaurar Nota
+  type: http
+  seq: 10
+}
+
+patch {
+  url: http://localhost:5000/api/notes/:id/restore
+  body: none
+  auth: inherit
+}
+
+params:path {
+  id: 
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

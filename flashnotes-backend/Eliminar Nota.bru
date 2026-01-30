@@ -1,0 +1,20 @@
+meta {
+  name: Eliminar Nota
+  type: http
+  seq: 5
+}
+
+delete {
+  url: http://localhost:5000/api/notes/:id/permanent
+  body: none
+  auth: inherit
+}
+
+params:path {
+  id: 
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

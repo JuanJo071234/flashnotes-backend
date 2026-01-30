@@ -1,0 +1,27 @@
+meta {
+  name: Edicion Titulo Nota
+  type: http
+  seq: 6
+}
+
+patch {
+  url: http://localhost:5000/api/notes/:id
+  body: json
+  auth: inherit
+}
+
+params:path {
+  id: 
+}
+
+body:json {
+  {
+    "title": "Título editado"
+  }
+  
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
