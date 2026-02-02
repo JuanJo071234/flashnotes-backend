@@ -10,7 +10,7 @@ function createSnapshot(note) {
 
 function limitStack(stack) {
     if (stack.length > MAX_HISTORY) {
-        stack.shift(); // elimina el snapshot más antiguo
+        stack.shift(); // FIFO: elimina el más antiguo
     }
 }
 
@@ -23,16 +23,16 @@ function applyUpdate(note, updates) {
         updates.content !== undefined &&
         updates.content.trim() !== note.content;
 
-    // 🔕 No hay cambios reales → no versionamos
+    // Si no hay cambios reales → NO versionamos
     if (!hasTitleChange && !hasContentChange) {
-        return;
+        return false;
     }
 
     // Guardar estado actual para UNDO
     note.versions.push(createSnapshot(note));
     limitStack(note.versions);
 
-    // Cambio nuevo invalida REDO
+    // Nueva edición invalida REDO
     note.redoStack = [];
 
     if (hasTitleChange) {
@@ -42,6 +42,8 @@ function applyUpdate(note, updates) {
     if (hasContentChange) {
         note.content = updates.content.trim();
     }
+
+    return true;
 }
 
 function undo(note) {
@@ -54,6 +56,7 @@ function undo(note) {
     limitStack(note.redoStack);
 
     const previous = note.versions.pop();
+
     note.title = previous.title;
     note.content = previous.content;
 }
@@ -68,6 +71,7 @@ function redo(note) {
     limitStack(note.versions);
 
     const next = note.redoStack.pop();
+
     note.title = next.title;
     note.content = next.content;
 }

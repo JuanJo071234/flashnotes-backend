@@ -1,51 +1,85 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Note = require('../models/Note');
 const noteHistory = require('../services/noteHistory.service');
 
 const router = express.Router();
 
-/**
- * GET /api/notes
- * Obtener todas las notas ACTIVAS
- */
+/* ============================================================
+   MIDDLEWARES
+============================================================ */
+
+function validateObjectId(req, res, next) {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({
+            message: 'ID inválido'
+        });
+    }
+
+    next();
+}
+
+async function loadNote(req, res, next) {
+    try {
+        const note = await Note.findById(req.params.id);
+
+        if (!note || note.isDeleted) {
+            return res.status(404).json({
+                message: 'Nota no encontrada'
+            });
+        }
+
+        req.note = note;
+        next();
+    } catch (error) {
+        res.status(500).json({
+            message: 'Error al cargar la nota'
+        });
+    }
+}
+
+/* ============================================================
+   LISTADOS
+============================================================ */
+
 router.get('/', async (req, res) => {
     try {
         const notes = await Note.find({ isDeleted: false })
             .sort({ createdAt: -1 });
 
         res.json(notes);
-    } catch (error) {
-        res.status(500).json({ message: 'Error al obtener las notas' });
+    } catch {
+        res.status(500).json({
+            message: 'Error al obtener las notas'
+        });
     }
 });
 
-/**
- * GET /api/notes/trash
- * Obtener notas en la papelera
- */
 router.get('/trash', async (req, res) => {
     try {
         const notes = await Note.find({ isDeleted: true })
             .sort({ deletedAt: -1 });
 
         res.json(notes);
-    } catch (error) {
-        res.status(500).json({ message: 'Error al obtener la papelera' });
+    } catch {
+        res.status(500).json({
+            message: 'Error al obtener la papelera'
+        });
     }
 });
 
-/**
- * GET /api/notes/:id/history
- * Estado del historial UNDO / REDO
- */
-router.get('/:id/history', async (req, res) => {
-    try {
-        const note = await Note.findById(req.params.id)
-            .select('versions redoStack updatedAt isDeleted');
+/* ============================================================
+   HISTORIAL
+============================================================ */
 
-        if (!note || note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
-        }
+router.get(
+    '/:id/history',
+    validateObjectId,
+    loadNote,
+    (req, res) => {
+        const note = req.note;
 
         res.json({
             canUndo: note.versions.length > 0,
@@ -54,15 +88,13 @@ router.get('/:id/history', async (req, res) => {
             redoCount: note.redoStack.length,
             lastEditedAt: note.updatedAt,
         });
-    } catch (error) {
-        res.status(500).json({ message: 'Error al obtener historial' });
     }
-});
+);
 
-/**
- * POST /api/notes
- * Crear una nueva nota
- */
+/* ============================================================
+   CREAR
+============================================================ */
+
 router.post('/', async (req, res) => {
     try {
         const { title, content } = req.body;
@@ -79,158 +111,192 @@ router.post('/', async (req, res) => {
         });
 
         res.status(201).json(note);
-    } catch (error) {
-        res.status(500).json({ message: 'Error al crear la nota' });
+    } catch {
+        res.status(500).json({
+            message: 'Error al crear la nota'
+        });
     }
 });
 
-/**
- * PATCH /api/notes/:id
- * Editar nota (UNDO + REDO + protección optimista opcional)
- */
-router.patch('/:id', async (req, res) => {
-    try {
-        const { title, content, lastKnownUpdate } = req.body;
+/* ============================================================
+   EDITAR (CON UNDO/REDO + OPTIMISTA)
+============================================================ */
 
-        if (title === undefined && content === undefined) {
-            return res.status(400).json({
-                message: 'No se enviaron campos para actualizar',
+router.patch(
+    '/:id',
+    validateObjectId,
+    loadNote,
+    async (req, res) => {
+        try {
+            const { title, content, lastKnownUpdate } = req.body;
+            const note = req.note;
+
+            if (title === undefined && content === undefined) {
+                return res.status(400).json({
+                    message: 'No se enviaron campos para actualizar',
+                });
+            }
+
+            // 🔐 Protección optimista
+            if (
+                lastKnownUpdate &&
+                new Date(lastKnownUpdate).getTime() !== note.updatedAt.getTime()
+            ) {
+                return res.status(409).json({
+                    message: 'La nota fue modificada previamente, recarga antes de editar',
+                });
+            }
+
+            if (title !== undefined && !title.trim()) {
+                return res.status(400).json({
+                    message: 'El título no puede estar vacío'
+                });
+            }
+
+            if (content !== undefined && !content.trim()) {
+                return res.status(400).json({
+                    message: 'El contenido no puede estar vacío'
+                });
+            }
+
+            noteHistory.applyUpdate(note, { title, content });
+            await note.save();
+
+            // 👇 ESTADO FRESCO REAL DESDE MONGO
+            const updated = await Note.findById(note.id);
+            res.json(updated);
+
+        } catch (error) {
+            res.status(500).json({
+                message: error.message
             });
         }
+    }
+);
 
-        const note = await Note.findById(req.params.id);
+/* ============================================================
+   UNDO / REDO
+============================================================ */
 
-        if (!note || note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
-        }
+router.patch(
+    '/:id/undo',
+    validateObjectId,
+    loadNote,
+    async (req, res) => {
+        try {
+            noteHistory.undo(req.note);
+            await req.note.save();
 
-        // 🔐 Protección optimista (opcional)
-        if (
-            lastKnownUpdate &&
-            new Date(lastKnownUpdate).getTime() !== note.updatedAt.getTime()
-        ) {
-            return res.status(409).json({
-                message: 'La nota fue modificada previamente, recarga antes de editar',
+            const fresh = await Note.findById(req.note.id);
+            res.json(fresh);
+
+        } catch (error) {
+            res.status(400).json({
+                message: error.message
             });
         }
-
-        if (title !== undefined && !title.trim()) {
-            return res.status(400).json({ message: 'El título no puede estar vacío' });
-        }
-
-        if (content !== undefined && !content.trim()) {
-            return res.status(400).json({ message: 'El contenido no puede estar vacío' });
-        }
-
-        noteHistory.applyUpdate(note, { title, content });
-        await note.save();
-
-        res.json(note);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
     }
-});
+);
 
-/**
- * PATCH /api/notes/:id/undo
- */
-router.patch('/:id/undo', async (req, res) => {
-    try {
-        const note = await Note.findById(req.params.id);
+router.patch(
+    '/:id/redo',
+    validateObjectId,
+    loadNote,
+    async (req, res) => {
+        try {
+            noteHistory.redo(req.note);
+            await req.note.save();
 
-        if (!note || note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
+            const fresh = await Note.findById(req.note.id);
+            res.json(fresh);
+
+        } catch (error) {
+            res.status(400).json({
+                message: error.message
+            });
         }
-
-        noteHistory.undo(note);
-        await note.save();
-
-        res.json(note);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
     }
-});
+);
 
-/**
- * PATCH /api/notes/:id/redo
- */
-router.patch('/:id/redo', async (req, res) => {
-    try {
-        const note = await Note.findById(req.params.id);
+/* ============================================================
+   PAPELERA
+============================================================ */
 
-        if (!note || note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
+router.patch(
+    '/:id/trash',
+    validateObjectId,
+    loadNote,
+    async (req, res) => {
+        try {
+            req.note.isDeleted = true;
+            req.note.deletedAt = new Date();
+
+            await req.note.save();
+
+            res.json({
+                message: 'Nota enviada a la papelera'
+            });
+        } catch {
+            res.status(500).json({
+                message: 'Error al eliminar la nota'
+            });
         }
-
-        noteHistory.redo(note);
-        await note.save();
-
-        res.json(note);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
     }
-});
+);
 
-/**
- * PATCH /api/notes/:id/trash
- * Soft delete
- */
-router.patch('/:id/trash', async (req, res) => {
-    try {
-        const note = await Note.findById(req.params.id);
+router.patch(
+    '/:id/restore',
+    validateObjectId,
+    async (req, res) => {
+        try {
+            const note = await Note.findById(req.params.id);
 
-        if (!note || note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
+            if (!note || !note.isDeleted) {
+                return res.status(404).json({
+                    message: 'Nota no encontrada en la papelera'
+                });
+            }
+
+            note.isDeleted = false;
+            note.deletedAt = null;
+
+            await note.save();
+
+            res.json(note);
+        } catch {
+            res.status(500).json({
+                message: 'Error al restaurar la nota'
+            });
         }
-
-        note.isDeleted = true;
-        note.deletedAt = new Date();
-
-        await note.save();
-
-        res.json({ message: 'Nota enviada a la papelera' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error al eliminar la nota' });
     }
-});
+);
 
-/**
- * PATCH /api/notes/:id/restore
- */
-router.patch('/:id/restore', async (req, res) => {
-    try {
-        const note = await Note.findById(req.params.id);
+/* ============================================================
+   ELIMINADO PERMANENTE
+============================================================ */
 
-        if (!note || !note.isDeleted) {
-            return res.status(404).json({ message: 'Nota no encontrada en la papelera' });
+router.delete(
+    '/:id/permanent',
+    validateObjectId,
+    async (req, res) => {
+        try {
+            const note = await Note.findByIdAndDelete(req.params.id);
+
+            if (!note) {
+                return res.status(404).json({
+                    message: 'Nota no encontrada'
+                });
+            }
+
+            res.json({
+                message: 'Nota eliminada permanentemente'
+            });
+        } catch {
+            res.status(500).json({
+                message: 'Error al eliminar definitivamente'
+            });
         }
-
-        note.isDeleted = false;
-        note.deletedAt = null;
-
-        await note.save();
-
-        res.json(note);
-    } catch (error) {
-        res.status(500).json({ message: 'Error al restaurar la nota' });
     }
-});
-
-/**
- * DELETE /api/notes/:id/permanent
- */
-router.delete('/:id/permanent', async (req, res) => {
-    try {
-        const note = await Note.findByIdAndDelete(req.params.id);
-
-        if (!note) {
-            return res.status(404).json({ message: 'Nota no encontrada' });
-        }
-
-        res.json({ message: 'Nota eliminada permanentemente' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error al eliminar definitivamente' });
-    }
-});
+);
 
 module.exports = router;
