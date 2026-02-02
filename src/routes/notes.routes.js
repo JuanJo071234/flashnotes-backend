@@ -131,22 +131,26 @@ router.patch(
             const { title, content, lastKnownUpdate } = req.body;
             const note = req.note;
 
+            // Debe venir al menos un campo
             if (title === undefined && content === undefined) {
                 return res.status(400).json({
                     message: 'No se enviaron campos para actualizar',
                 });
             }
 
-            // 🔐 Protección optimista
-            if (
-                lastKnownUpdate &&
-                new Date(lastKnownUpdate).getTime() !== note.updatedAt.getTime()
-            ) {
-                return res.status(409).json({
-                    message: 'La nota fue modificada previamente, recarga antes de editar',
-                });
+            // 🔐 PROTECCIÓN OPTIMISTA (exacta para tests)
+            if (lastKnownUpdate) {
+                const client = new Date(lastKnownUpdate).getTime();
+                const server = new Date(note.updatedAt).getTime();
+
+                if (client !== server) {
+                    return res.status(409).json({
+                        message: 'La nota fue modificada previamente, recarga antes de editar',
+                    });
+                }
             }
 
+            // Validaciones de negocio
             if (title !== undefined && !title.trim()) {
                 return res.status(400).json({
                     message: 'El título no puede estar vacío'
@@ -159,10 +163,10 @@ router.patch(
                 });
             }
 
+            // 👉 DELEGAMOS TODA LA LÓGICA AL SERVICIO
             noteHistory.applyUpdate(note, { title, content });
             await note.save();
 
-            // 👇 ESTADO FRESCO REAL DESDE MONGO
             const updated = await Note.findById(note.id);
             res.json(updated);
 
@@ -174,6 +178,7 @@ router.patch(
     }
 );
 
+
 /* ============================================================
    UNDO / REDO
 ============================================================ */
@@ -184,6 +189,13 @@ router.patch(
     loadNote,
     async (req, res) => {
         try {
+            // 👇 Control explícito que espera el test
+            if (req.note.versions.length === 0) {
+                return res.status(400).json({
+                    message: 'No hay cambios para deshacer'
+                });
+            }
+
             noteHistory.undo(req.note);
             await req.note.save();
 
@@ -198,12 +210,19 @@ router.patch(
     }
 );
 
+
 router.patch(
     '/:id/redo',
     validateObjectId,
     loadNote,
     async (req, res) => {
         try {
+            if (req.note.redoStack.length === 0) {
+                return res.status(400).json({
+                    message: 'No hay cambios para rehacer'
+                });
+            }
+
             noteHistory.redo(req.note);
             await req.note.save();
 

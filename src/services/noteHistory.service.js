@@ -10,11 +10,12 @@ function createSnapshot(note) {
 
 function limitStack(stack) {
     if (stack.length > MAX_HISTORY) {
-        stack.shift(); // FIFO: elimina el más antiguo
+        stack.shift();   // elimina el más antiguo
     }
 }
 
 function applyUpdate(note, updates) {
+
     const hasTitleChange =
         updates.title !== undefined &&
         updates.title.trim() !== note.title;
@@ -23,16 +24,21 @@ function applyUpdate(note, updates) {
         updates.content !== undefined &&
         updates.content.trim() !== note.content;
 
-    // Si no hay cambios reales → NO versionamos
-    if (!hasTitleChange && !hasContentChange) {
-        return false;
+    // 🔥 CLAVE:
+    // Si es la primera edición REAL de la nota,
+    // debemos crear snapshot inicial sí o sí
+    const isFirstEdit = note.versions.length === 0;
+
+    // Si no hay cambios reales y no es primera edición → no hacemos nada
+    if (!hasTitleChange && !hasContentChange && !isFirstEdit) {
+        return;
     }
 
-    // Guardar estado actual para UNDO
+    // 👉 Guardar estado ACTUAL para poder hacer UNDO
     note.versions.push(createSnapshot(note));
     limitStack(note.versions);
 
-    // Nueva edición invalida REDO
+    // 👉 Nueva edición invalida completamente el REDO
     note.redoStack = [];
 
     if (hasTitleChange) {
@@ -42,8 +48,6 @@ function applyUpdate(note, updates) {
     if (hasContentChange) {
         note.content = updates.content.trim();
     }
-
-    return true;
 }
 
 function undo(note) {
@@ -51,7 +55,7 @@ function undo(note) {
         throw new Error('No hay cambios para deshacer');
     }
 
-    // Guardar estado actual para REDO
+    // 👉 Guardar estado actual para REDO
     note.redoStack.push(createSnapshot(note));
     limitStack(note.redoStack);
 

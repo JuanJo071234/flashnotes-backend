@@ -31,7 +31,7 @@ async function history(id) {
 }
 
 /* ============================================================
-   🧪 CICLO DE VIDA
+   CICLO DE VIDA
 ============================================================ */
 
 beforeAll(async () => {
@@ -47,7 +47,7 @@ afterAll(async () => {
 });
 
 /* ============================================================
-   🧪 TESTS REALES
+   TESTS
 ============================================================ */
 
 describe('Core CRUD', () => {
@@ -68,55 +68,74 @@ describe('Core CRUD', () => {
 
 });
 
-describe('↩UNDO / REDO', () => {
+/* ============================================================
+   UNDO / REDO
+============================================================ */
+
+describe('↩ UNDO / REDO', () => {
 
     test('Flujo básico undo → redo', async () => {
         const created = await createNote('A', '1');
         const id = created.body._id;
 
-        await update(id, { title: 'B' });
+        await update(id, { title: 'B', content: '1' });
 
+        // UNDO → debe volver a A
         const u = await undo(id);
         expect(u.status).toBe(200);
         expect(u.body.title).toBe('A');
 
+        // REDO → debe volver a B
         const r = await redo(id);
         expect(r.status).toBe(200);
         expect(r.body.title).toBe('B');
     });
 
-    test('Multiples undo en cadena', async () => {
+    test('Multiples undo en cadena respetan el stack real', async () => {
         const { body } = await createNote('v1', 'c1');
         const id = body._id;
 
-        await update(id, { title: 'v2' });
-        await update(id, { title: 'v3' });
-        await update(id, { title: 'v4' });
+        await update(id, { title: 'v2', content: 'c1' });
+        await update(id, { title: 'v3', content: 'c1' });
+        await update(id, { title: 'v4', content: 'c1' });
 
         await undo(id); // → v3
         await undo(id); // → v2
 
-        // 👇 Traemos directamente la nota por ID, no por listado
-        const note = await request(app).get(`/api/notes/${id}/history`);
-        expect(note.body.canUndo).toBe(true);
-        expect(note.body.undoCount).toBe(1);
+        const h = await history(id);
+
+        expect(h.status).toBe(200);
+
+        // Queda 1 paso atrás posible (v1)
+        expect(h.body.undoCount).toBe(1);
+        expect(h.body.canUndo).toBe(true);
+
+        // Hay 2 redos posibles (v3, v4)
+        expect(h.body.canRedo).toBe(true);
+        expect(h.body.redoCount).toBe(2);
     });
 
     test('Redo se limpia tras nueva edición', async () => {
         const { body } = await createNote('x', '1');
         const id = body._id;
 
-        await update(id, { title: 'y' });
+        await update(id, { title: 'y', content: '1' });
         await undo(id);
 
-        // Nueva edición → debe matar redo
-        await update(id, { title: 'z' });
+        // Nueva edición → debe eliminar el redoStack
+        await update(id, { title: 'z', content: '1' });
 
         const r = await redo(id);
+
         expect(r.status).toBe(400);
+        expect(r.body.message).toMatch(/rehacer/);
     });
 
 });
+
+/* ============================================================
+   LÍMITE DE HISTORIAL
+============================================================ */
 
 describe('Límite de historial', () => {
 
@@ -125,7 +144,7 @@ describe('Límite de historial', () => {
         const id = body._id;
 
         for (let i = 0; i < 25; i++) {
-            await update(id, { title: `t${i}` });
+            await update(id, { title: `t${i}`, content: 'c' });
         }
 
         const h = await history(id);
@@ -135,6 +154,10 @@ describe('Límite de historial', () => {
 
 });
 
+/* ============================================================
+   CONFLICTO OPTIMISTA
+============================================================ */
+
 describe('Conflicto optimista', () => {
 
     test('Debe rechazar edición con lastKnownUpdate viejo', async () => {
@@ -143,10 +166,12 @@ describe('Conflicto optimista', () => {
 
         const oldDate = body.updatedAt;
 
-        await update(id, { title: 'nuevo' });
+        // Otra edición primero
+        await update(id, { title: 'nuevo', content: 'b' });
 
         const conflict = await update(id, {
             title: 'intento',
+            content: 'b',
             lastKnownUpdate: oldDate
         });
 
@@ -154,6 +179,10 @@ describe('Conflicto optimista', () => {
     });
 
 });
+
+/* ============================================================
+   PAPELERA
+============================================================ */
 
 describe('Papelera', () => {
 
@@ -173,6 +202,10 @@ describe('Papelera', () => {
     });
 
 });
+
+/* ============================================================
+   CASOS DE ERROR
+============================================================ */
 
 describe('🧪 Casos de error', () => {
 
